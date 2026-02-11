@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mobile Gesture 3D Heart Particles</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+
+<style>
+body{
+margin:0;
+overflow:hidden;
+background:black;
+font-family:sans-serif;
+}
+
+#video{
+position:absolute;
+top:0;
+left:0;
+opacity:0;
+pointer-events:none;
+z-index:-1;
+}
+
+#loading{
+position:fixed;
+inset:0;
+display:flex;
+align-items:center;
+justify-content:center;
+color:white;
+background:black;
+z-index:10;
+}
+</style>
+</head>
+
+<body>
+
+<div id="loading">Allow Camera Access...</div>
+<video id="video" autoplay playsinline muted></video>
+
+<script>
+
+let scene,camera,renderer,particles;
+let basePositions=[];
+let count=6000;
+
+let handX=0.5;
+let handY=0.5;
+let openness=0;
+let handDetected=false;
+
+initThree();
+initParticles();
+initHandTracking();
+animate();
+
+function initThree(){
+scene=new THREE.Scene();
+
+camera=new THREE.PerspectiveCamera(
+75,
+window.innerWidth/window.innerHeight,
+0.1,
+1000
+);
+camera.position.z=25;
+
+renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(window.innerWidth,window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+document.body.appendChild(renderer.domElement);
+
+window.addEventListener("resize",()=>{
+camera.aspect=window.innerWidth/window.innerHeight;
+camera.updateProjectionMatrix();
+renderer.setSize(window.innerWidth,window.innerHeight);
+});
+}
+
+function createHeartTexture(){
+const canvas=document.createElement("canvas");
+canvas.width=64;
+canvas.height=64;
+
+const ctx=canvas.getContext("2d");
+ctx.fillStyle="white";
+
+ctx.beginPath();
+ctx.moveTo(32,58);
+ctx.bezierCurveTo(2,38,2,18,16,18);
+ctx.bezierCurveTo(26,18,32,28,32,28);
+ctx.bezierCurveTo(32,28,38,18,48,18);
+ctx.bezierCurveTo(62,18,62,38,32,58);
+ctx.closePath();
+ctx.fill();
+
+return new THREE.CanvasTexture(canvas);
+}
+
+function initParticles(){
+
+const geometry=new THREE.BufferGeometry();
+const positions=new Float32Array(count*3);
+const colors=new Float32Array(count*3);
+
+for(let i=0;i<count;i++){
+const i3=i*3;
+
+const theta=Math.random()*Math.PI*2;
+const phi=Math.acos(2*Math.random()-1);
+const r=10*Math.cbrt(Math.random());
+
+const x=r*Math.sin(phi)*Math.cos(theta);
+const y=r*Math.sin(phi)*Math.sin(theta);
+const z=r*Math.cos(phi);
+
+positions[i3]=x;
+positions[i3+1]=y;
+positions[i3+2]=z;
+
+basePositions.push({x,y,z});
+
+colors[i3]=1;
+colors[i3+1]=0.2;
+colors[i3+2]=0.6;
+}
+
+geometry.setAttribute("position",new THREE.BufferAttribute(positions,3));
+geometry.setAttribute("color",new THREE.BufferAttribute(colors,3));
+
+const heartTexture=createHeartTexture();
+
+const material=new THREE.PointsMaterial({
+size:0.8,
+map:heartTexture,
+vertexColors:true,
+blending:THREE.AdditiveBlending,
+transparent:true,
+depthWrite:false,
+alphaTest:0.5
+});
+
+particles=new THREE.Points(geometry,material);
+scene.add(particles);
+}
+
+function animate(){
+requestAnimationFrame(animate);
+
+const positions=particles.geometry.attributes.position.array;
+
+let expansion=1;
+
+if(handDetected){
+expansion=0.5+(openness*3);
+}else{
+expansion=1+Math.sin(Date.now()*0.002)*0.2;
+}
+
+for(let i=0;i<count;i++){
+const i3=i*3;
+
+positions[i3]+=((basePositions[i].x*expansion)-positions[i3])*0.1;
+positions[i3+1]+=((basePositions[i].y*expansion)-positions[i3+1])*0.1;
+positions[i3+2]+=((basePositions[i].z*expansion)-positions[i3+2])*0.1;
+}
+
+particles.geometry.attributes.position.needsUpdate=true;
+
+particles.rotation.y+=(handX-0.5)*0.05;
+particles.rotation.x+=(handY-0.5)*0.05;
+
+renderer.render(scene,camera);
+}
+
+function initHandTracking(){
+
+const video=document.getElementById("video");
+
+navigator.mediaDevices.getUserMedia({
+video:{
+facingMode:{ideal:"environment"},
+width:{ideal:640},
+height:{ideal:480}
+},
+audio:false
+})
+.then(stream=>{
+video.srcObject=stream;
+video.play();
+
+const hands=new Hands({
+locateFile:(file)=>{
+return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+}
+});
+
+hands.setOptions({
+maxNumHands:1,
+modelComplexity:1,
+minDetectionConfidence:0.6,
+minTrackingConfidence:0.6
+});
+
+hands.onResults(results=>{
+if(results.multiHandLandmarks &&
+results.multiHandLandmarks.length>0){
+
+handDetected=true;
+
+const lm=results.multiHandLandmarks[0];
+
+handX=lm[9].x;
+handY=lm[9].y;
+
+const wrist=lm[0];
+const tip=lm[12];
+
+const dx=tip.x-wrist.x;
+const dy=tip.y-wrist.y;
+
+const dist=Math.sqrt(dx*dx+dy*dy);
+openness=Math.min(dist*4,1);
+
+}else{
+handDetected=false;
+}
+});
+
+const cameraUtils=new Camera(video,{
+onFrame:async()=>{
+await hands.send({image:video});
+},
+width:640,
+height:480
+});
+
+cameraUtils.start();
+
+document.getElementById("loading").style.display="none";
+
+})
+.catch(err=>{
+alert("Camera access failed. Use HTTPS and allow permission.");
+console.error(err);
+});
+}
+
+</script>
+
+</body>
+</html>
